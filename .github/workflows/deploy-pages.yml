@@ -1,0 +1,80 @@
+# 把这个 Vite 项目发布到 GitHub Pages。
+# 线上地址：https://prompt-to-harness.github.io/ch02-pages-release-20261101-01/
+#
+# 前提（仓库管理员做一次，本仓库已通过 API 完成）：
+#   gh api --method POST repos/{owner}/{repo}/pages -f build_type=workflow
+#   等价于 Settings → Pages → Build and deployment → Source 选择 "GitHub Actions"，
+#   作用是为仓库建好 Pages 站点并指定用工作流产物发布。
+#   建好之后，后续 push 到 main 会自动重新部署。
+
+name: Deploy to GitHub Pages
+
+on:
+  # 推送到默认分支（main）时发布；workflow_dispatch 方便手动重跑。
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 默认只给读仓库内容的权限；需要写权限的地方在具体 job 里单独申请。
+permissions:
+  contents: read
+
+# Pages 同一时间只允许一个部署在跑：后来的排队，不会打断正在跑的。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout 需要读仓库源码
+      pages: read    # configure-pages 需要读取 Pages 站点信息（base_url / base_path）
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          # 用仓库里的 .nvmrc（22.19.0），保证 CI 和本地同一个 Node 版本
+          node-version-file: .nvmrc
+          # 缓存 npm 包下载目录，缓存 key 由 package-lock.json 算出
+          cache: npm
+
+      - name: Install dependencies
+        # 按 package-lock.json 精确安装，不改依赖版本
+        run: npm ci
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v6
+
+      - name: Build
+        run: npm run build
+        env:
+          # 项目站点部署在仓库子路径下，base_path 就是 /ch02-pages-release-20261101-01，
+          # 传给 Vite 当 base，资源路径才不会 404
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          # 上传 Vite 产出的 dist 目录
+          path: ./dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write    # 创建 Pages 部署记录
+      id-token: write # 让 deploy-pages 用 OIDC 令牌完成鉴权（不需要长期 PAT）
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
